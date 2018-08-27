@@ -28,8 +28,9 @@
            (filter #(= :db/id (first %)))
            first
            last))
+
 ;;FIXME Datomic does not understand (:db/id :as :id) as a selector, so we need to help it
-(defn ^:private fix-db-id 
+(defn ^:private fix-db-id
   [m target-id-name]
   (if-let [v (get m :db/id)]
     (-> m
@@ -106,7 +107,8 @@
     (case kind
       :list     (extract-lacinia-type-name {:field-definition (-> field-definition :type)})
       :non-null (-> field-definition :type :type :type)
-      :root     (-> field-definition :type :type))))
+      :root     (-> field-definition :type :type)
+      :none)))
 
 (defn ^:private find-selection-by-field
   [field-name selections]
@@ -132,6 +134,8 @@
                         [?f :lacinia->datomic.query/type :pull]
                         [?f :field/parent ?t]
                         [?t :lacinia/query true]
+                        [?t :lacinia/tag true]
+                        [?f :lacinia/tag true]
                         [?p :param/parent ?f]
                         (or [?p :lacinia->datomic.param/lookup]
                             [?p :lacinia->datomic.param/eid])]
@@ -149,9 +153,8 @@
                         [?f :lacinia->datomic.query/type :find]
                         [?f :field/parent ?t]
                         [?t :lacinia/query true]
-                        [?p :param/parent ?f]
-                        (or [?p :lacinia->datomic.param/offset]
-                            [?p :lacinia->datomic.param/limit])]
+                        [?t :lacinia/tag true]
+                        [?f :lacinia/tag true]]
                       @engine-conn)
                  vec flatten)]
     (->> eids
@@ -285,28 +288,29 @@
         type-name (extract-lacinia-type-name field-selection)
         fields (query-datomic-fields-on-lacinia-type type-name engine-conn)
         lacinia->datomic (lacinia->datomic-map type-name fields)]
-    (vec
-     (reduce
-      (fn [c selection]
-        (let [lacinia-field-name (:field selection)
-              datomic-fields (get lacinia->datomic lacinia-field-name)
-              selection-selections (:selections selection)
-              is-paginated? (paginated-lookup? type-name lacinia-field-name engine-conn)]
-          (if datomic-fields
-            (if (and selection-selections
-                     (not is-paginated?))
-              (conj c (assoc {} (first datomic-fields)
-                             (build-datomic-selector selection engine-conn)))
-              (apply conj c datomic-fields))
-            c)))
-      #{} inner-selections))))
+    (->> inner-selections
+         (reduce
+          (fn [c selection]
+            (let [lacinia-field-name (:field selection)
+                  datomic-fields (get lacinia->datomic lacinia-field-name)
+                  selection-selections (:selections selection)
+                  is-paginated? (paginated-lookup? type-name lacinia-field-name engine-conn)]
+              (println lacinia-field-name datomic-fields is-paginated?)
+              (if datomic-fields
+                (if (and selection-selections
+                         (not is-paginated?))
+                  (conj c (assoc {} (first datomic-fields)
+                                 (build-datomic-selector selection engine-conn)))
+                  (apply conj c datomic-fields))
+                c)))
+          #{})
+         vec)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn ^:private field->resolve-pull-entry
   [{:keys [field/camelCaseName field/parent param/_parent] :as field}]
-  {:resolve-type :pull
-   :field-name camelCaseName
+  {:field-name camelCaseName
    :args (reduce
           (fn [m param]
             (assoc m (:param/camelCaseName param)
@@ -327,17 +331,16 @@
    :reverse-lookup reverse-lookup})
 
 (defn ^:private field->resolve-find-entry
-  [{:keys [field/camelCaseName field/parent param/_parent] :as field}]
-  ;;FIXME will needs something along these lines when :find is done
-  (let [pull-param (first _parent)
-        arg-type (pull-param-type pull-param)]
-    {:resolve-type :find
-     :field-name camelCaseName
-     :arg-name (:param/camelCaseName pull-param)
-     :arg-type arg-type
-     :ident (if (= :lookup arg-type)
-              (:lacinia->datomic.param/lookup pull-param)
-              :none)}))
+  [{:keys [field/camelCaseName param/_parent] :as field}]
+  {:field-name camelCaseName
+   :args (reduce
+          (fn [m param]
+            (if-let [where-builder (:lacinia->datomic.param/where-builder param)]
+              (let [where-builder-fn (find-var where-builder)]
+                (assoc m (:param/camelCaseName param)
+                       {:where-builder-fn where-builder-fn}))
+              m))
+          {} _parent)})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -355,8 +358,10 @@
              nil inboud-args))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Pull resolver functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn ^:private get-field-selection-for-pull-resolver
+(defn ^:private get-field-selection-for-root-resolver
   [ctx lacinia-field-name]
   (->> ctx
        extract-lacinia-selections
@@ -366,13 +371,12 @@
   [lacinia-schema pull-fields engine-conn]
   (->> pull-fields
        (reduce
-        (fn [m {:keys [resolve-type field-name
-                       arg-name arg-type ident transform] :as field-entry}]
+        (fn [m {:keys [field-name] :as field-entry}]
           (assoc-in m [:queries field-name :resolve]
                     (fn [{:keys [db] :as ctx} args resolved-value]
                       (println "=> Pull Resolver for query:" field-name)
                       (println "... args:" args)
-                      (let [field-selection (get-field-selection-for-pull-resolver
+                      (let [field-selection (get-field-selection-for-root-resolver
                                              ctx field-name)
                             selector (build-datomic-selector field-selection engine-conn)
                             where (build-single-eid args (:args field-entry))]
@@ -386,6 +390,54 @@
                         (-> (fetch-one db selector '?e where)
                             (resolve/with-context {:where where}))))))
         lacinia-schema)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Find resolver functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn ^:private get-field-selection-for-find-resolver
+  [ctx lacinia-field-name]
+  (->> ctx
+       extract-lacinia-selections
+       first
+       :selections
+       (find-selection-by-field :nodes)))
+
+(defn ^:private attach-find-resolvers
+  [lacinia-schema find-fields engine-conn]
+  (->> find-fields
+       (reduce
+        (fn [m {:keys [field-name] :as field-entry}]
+          (assoc-in m [:queries field-name :resolve]
+                    (fn [{:keys [db] :as ctx} {:keys [offset limit] :as args} resolved-value]
+                      (println "=> Find Resolver for query:" field-name)
+                      (println "... args:" args)
+                      (let [field-selection (get-field-selection-for-find-resolver
+                                             ctx field-name)
+                            selector (build-datomic-selector field-selection engine-conn)
+                            
+                            where (reduce-kv (fn [c arg-k arg-v]
+                                               (if-let [{:keys [where-builder-fn]}
+                                                        (get (:args field-entry) arg-k)]
+                                                 (where-builder-fn c args)
+                                                 c))
+                                             [] args)]
+                        (println "... selector:")
+                        (clojure.pprint/pprint selector)
+                        (println "... where:")
+                        (clojure.pprint/pprint where)
+                        #_(println "------")
+                        #_(clojure.pprint/pprint
+                           (fetch-one db selector '?e where))
+                        (-> (fetch-page db selector '?e where
+                                        {:offset offset
+                                         :limit limit})
+                            (resolve/with-context {:where where}))))))
+        lacinia-schema)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Lookup resolver functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn ^:private get-field-selection-for-lookup-resolver
   [ctx lacinia-field-name]
@@ -443,6 +495,10 @@
                             (resolve/with-context {:where this-where}))))))
         lacinia-schema)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Public functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn attach-resolvers
   [lacinia-schema engine-conn]
   (let [pull-fields (->> engine-conn
@@ -456,12 +512,21 @@
                            (map field->resolve-lookup-entry))]
     (-> lacinia-schema
         (attach-pull-resolvers pull-fields engine-conn)
+        (attach-find-resolvers find-fields engine-conn)
         (attach-lookup-resolvers lookup-fields engine-conn))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Test stuff
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn transform-email
   [v]
-  (println v)
-  v)
+  (clojure.string/lower-case v))
+
+(defn build-employee-name-search-where
+  [c args]
+  (println "where builder called")
+  (conj c ['?e :employee/email]))
 
 (def hodur-shared-schema
   '[^{:lacinia/tag true
@@ -474,14 +539,14 @@
      
      ^{:type String
        :lacinia/tag true
-       :datomic/tag true 
+       :datomic/tag true
        :datomic/unique :db.unique/identity}
      email
 
      ^{:type String
        :lacinia/tag true
        :datomic/tag true}
-     first-name
+     first-name -> firstName -> :employee/first-name
 
      ^{:type String
        :lacinia/tag true
@@ -630,14 +695,20 @@
         :lacinia->datomic.param/eid true}
       id]
 
-     ^{:type EmployeeList 
+     ^{:type Project
+       :lacinia->datomic.query/type :pull}
+     project
+     [^{:type ID
+        :lacinia->datomic.param/eid true}
+      id]
+
+     ^{:type EmployeeList
        :lacinia->datomic.query/type :find
        :lacinia/resolve :project/upsert}
      employees
      [^{:type String
         :optional true
-        :default ""
-        :lacinia->datomic.param/where-builder build-employee-name-search-where}
+        :lacinia->datomic.param/where-builder hodur-lacinia-datomic-adapter.core/build-employee-name-search-where}
       name-search
       ^{:type Integer
         :optional true
@@ -788,17 +859,48 @@
   #_(clojure.pprint/pprint context)
   (str firstName " " lastName))
 
+(defn ^:private input-type->map-to-type
+  [input-type-name engine-conn]
+  (if-let [map-to-name (-> @engine-conn
+                           (d/pull '[:lacinia->datomic.input/map-to]
+                                   [:type/PascalCaseName input-type-name])
+                           :lacinia->datomic.input/map-to)]
+    (-> @engine-conn
+        (d/pull '[* {:field/_parent
+                     [{:field/type [*]} *]}]
+                [:type/name (str map-to-name)]))))
+
+(defn ^:private map-input-to-datomic
+  [input map-to-type]
+  (let [fields (:field/_parent map-to-type)]
+    (reduce-kv (fn [m k v]
+                 (if-let [field (->> fields
+                                     (filter #(= k (:field/camelCaseName %)))
+                                     first)]
+                   (if (= true (:datomic/tag field))
+                     (assoc m (keyword (name (:type/kebab-case-name map-to-type))
+                                       (name (:field/kebab-case-name field))) v)
+                     m)
+                   m))
+               {} input)))
+
 (defn project-upsert
   [{:keys [db-conn] :as ctx} {:keys [input] :as args} resolved-value]
+  ;;FIXME this should attach to all where [?f :lacinia->datomic.mutation/type :upsert]
   (println "AQUII!!!")
   (println input)
-  (let [tx-result (datomic/transact db-conn {:tx-data [{:project/name (:name input)
-                                                        :project/description (:description input)}]})
+  ;;FIXME map the :tx-data as per indicated on the input's :lacinia->datomic.input/map-to
+  (let [tx-result (datomic/transact db-conn
+                                    {:tx-data [{:project/name (:name input)
+                                                :project/description (:description input)}]})
         db-after (:db-after tx-result)
         tx-data (:tx-data tx-result)
+        ;;FIXME last here works only if something changes in the db, otherwise last will be the inst part of the datom
         datom (last tx-data)
         eid (:e datom)
+        ;;FIXME the selector needs to be in sync with the one on the query/pull interfaces
         pulled (datomic/pull db-after '[*] eid)]
+    ;;FIXME map to the field's type's lacinia-style (will need to create a selector - above)
     (clojure.pprint/pprint pulled)))
 
 
@@ -865,20 +967,6 @@
                    "{ employeeByEmail (email: \"foo\") { fullName firstName projects { name } supervisor { fullName } } }"
                    nil nil)
 
-#_(lacinia/execute
-   compiled-schema
-   "{ employeeByEmail (email: \"zeh@work.co\") { fullName supervisor { firstName } reportees { lastName } } }"
-   nil nil)
-
-#_(lacinia/execute
-   compiled-schema
-   "{ employeesWithOffsetAndLimit { fullName supervisor { firstName } reportees { lastName } } }"
-   nil nil)
-
-#_(lacinia/execute
-   compiled-schema
-   "{ employeeByEmail (email: \"zeh@work.co\") { fullName firstName supervisor { fullName } } }"
-   nil nil)
 
 
 #_ (lacinia/execute
@@ -890,9 +978,19 @@
    compiled-schema
    "{ employee (email: \"tl@work.co\") { id fullName reportees (limit: 20) { totalCount pageInfo { totalPages } nodes { id fullName } } } }" nil {:db (datomic/db db-conn)})
 
+#_(lacinia/execute
+   compiled-schema
+   "{ project (id: \"11448115068404235\") { id name } }" nil {:db (datomic/db db-conn)})
+
 (lacinia/execute
  compiled-schema
- "mutation { upsertProject (input: { name: \"Project X\" description: \"Mega project!!!!\"}) { id name } }" nil {:db-conn db-conn :db (datomic/db db-conn)})
+ "{ employees (nameSearch: \"bla\") { totalCount nodes { id fullName } }
+    # employee (email: \"tl@work.co\") { id firstName }
+}" nil {:db (datomic/db db-conn)})
+
+#_(lacinia/execute
+   compiled-schema
+   "mutation { upsertProject (input: { name: \"Project X\" description: \"Mega project!!!!\"}) { id name } }" nil {:db-conn db-conn :db (datomic/db db-conn)})
 
 #_(lacinia/execute
    compiled-schema
@@ -901,11 +999,22 @@
    nil nil
    )
 
-(datomic/q
- '[:find (pull ?p [*])
-   :where
-   [?p :project/name]]
- (datomic/db db-conn))
+#_(datomic/q
+   '[:find (pull ?p [*])
+     :where
+     [?p :project/name]]
+   (datomic/db db-conn))
+
+
+#_(-> (datomic/transact db-conn {:tx-data [{:employee/email "tl@worl.co"
+                                            :employee/projects [67888245945401859]}]})
+      :tx-data)
+
+
+#_(datomic/pull (datomic/db db-conn)
+                '[{:employee/projects [*]}]
+                [:employee/email "tl@work.co"])
+
 
 
 #_(clojure.pprint/pprint
@@ -942,7 +1051,25 @@
             [?r :employee/supervisor ?e]]
           (datomic/db db-conn))
 
+         (datomic/q
+          '[:find ?e
+            :where
+            [?e :employee/email "tl@work.co"]]
+          (datomic/db db-conn))
 
+         (datomic/q
+          '[:find ?eid
+            :in $ ?eid
+            :where
+            [?eid]]
+          (datomic/db db-conn)
+          42630264832131144)
+
+         (datomic/pull (datomic/db db-conn)
+                       '[*]
+                       42630264832131144)
+
+         
          (datomic/q
           '[:find ?e
             :where

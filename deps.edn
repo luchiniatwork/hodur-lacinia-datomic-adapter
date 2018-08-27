@@ -3,16 +3,17 @@
  :deps
  {org.clojure/clojure      {:mvn/version "1.9.0"}
   hodur-engine             {:local/root "../hodur-engine"}
-  com.datomic/client-cloud {:mvn/version "0.8.56"}}
+  com.datomic/client-cloud {:mvn/version "0.8.56"}
+  com.walmartlabs/lacinia  {:mvn/version "0.28.0"}
+  hodur-lacinia-lacinia   {:local/root "../hodur-lacinia-schema"}
+  hodur-datomic-lacinia   {:local/root "../hodur-datomic-schema"}}
 
  :mvn/repos {"datomic-cloud" {:url "s3://datomic-releases-1fc2183a/maven/releases"}}
  
  :aliases
  {:dev
   {:extra-deps
-   {com.walmartlabs/lacinia {:mvn/version "0.28.0"}
-    hodur-lacinia-lacinia   {:local/root "../hodur-lacinia-schema"}
-    hodur-datomic-lacinia   {:local/root "../hodur-datomic-schema"}}}
+   {}}
 
   :test
   {:extra-paths ["test"]
