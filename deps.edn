@@ -1,24 +1,25 @@
 {:paths ["src"]
 
  :deps
- {org.clojure/clojure      {:mvn/version "1.9.0"}
-  hodur-engine             {:local/root "../hodur-engine"}
-  com.datomic/client-cloud {:mvn/version "0.8.56"}
-  com.walmartlabs/lacinia  {:mvn/version "0.28.0"}
-  hodur-lacinia-lacinia   {:local/root "../hodur-lacinia-schema"}
-  hodur-datomic-lacinia   {:local/root "../hodur-datomic-schema"}}
+ {com.datomic/client-cloud {:mvn/version "0.8.66"}
+  com.walmartlabs/lacinia  {:mvn/version "0.30.0"}
+  hodur/datomic-schema     {:mvn/version "0.1.0"}
+  hodur/engine             {:mvn/version "0.1.2"}
+  hodur/lacinia-schema     {:mvn/version "0.1.0"}
+  org.clojure/clojure      {:mvn/version "1.9.0"}}
 
  :mvn/repos {"datomic-cloud" {:url "s3://datomic-releases-1fc2183a/maven/releases"}}
  
  :aliases
  {:dev
-  {:extra-deps
+  {:extra-paths ["dev"]
+   :extra-deps
    {}}
 
   :test
   {:extra-paths ["test"]
    :extra-deps
-   {hodur-engine {:local/root "../hodur-engine"}
+   {hodur/engine {:local/root "../hodur-engine"}
     com.cognitect/test-runner {:git/url "https://github.com/cognitect-labs/test-runner.git"
                                :sha "5fb4fc46ad0bf2e0ce45eba5b9117a2e89166479"}}
    :main-opts ["-m" "cognitect.test-runner"]}}}
