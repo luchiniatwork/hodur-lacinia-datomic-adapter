@@ -158,16 +158,16 @@
 {
   employees (nameSearch: \"Ze\") {
     totalCount
-    nodes { id fullName }
+    nodes { email fullName }
   }
 }")
 
 ;; getting a "one" with an eid
-(run-query
- "
+#_(run-query
+   "
 {
   employee (email: \"tl@work.co\") {
-    id
+    email
     firstName
   }
 }")

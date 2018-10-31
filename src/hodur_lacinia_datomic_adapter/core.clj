@@ -8,29 +8,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;FIXME Datomic does not understand (:db/id :as :id) as a selector, so we need to help it
-(defn ^:private find-target-id
-  [selector]
-  (some->> selector
-           (filter seq?)
-           (filter #(= :db/id (first %)))
-           first
-           last))
-
-;;FIXME Datomic does not understand (:db/id :as :id) as a selector, so we need to help it
-(defn ^:private fix-db-id
-  [m target-id-name]
-  (if-let [v (get m :db/id)]
-    (-> m
-        (dissoc :db/id)
-        (assoc target-id-name v))
-    m))
-
-;;FIXME Datomic does not understand (:db/id :as :id) as a selector, so we need to help it
-(defn ^:private fix-db-ids
-  [c target-id-name]
-  (map #(fix-db-id % target-id-name) c))
-
 (defn ^:private pull-many
   [db selector eids]
   (map #(datomic/pull db selector %)
@@ -53,8 +30,7 @@
                  first)
              0)
          has-prev (>= (- offset limit) 0)
-         has-next (<= (+ offset limit) total-count)
-         target-id-name (find-target-id selector)]
+         has-next (<= (+ offset limit) total-count)]
      {:totalCount total-count
       :pageInfo {:totalPages (int (Math/ceil (/ total-count limit)))
                  :currentPage (int (Math/ceil (/ offset limit)))
@@ -64,24 +40,16 @@
                  :prevOffset (if has-prev (- offset limit) 0)
                  :hasNext has-next
                  :nextOffset (if has-next (+ offset limit) offset)}
-      :nodes (fix-db-ids (pull-many db selector eids) target-id-name)})))
+      :nodes (pull-many db selector eids)})))
 
 (defn ^:private fetch-one
   [db selector find where]
   (let [eid (-> (datomic/q {:query (concat `[:find ~find :where] where)
                             :args [db]})
-                flatten first)
-        target-id-name (find-target-id selector)]
-    (fix-db-id (datomic/pull db selector eid) target-id-name)))
+                flatten first)]
+    (datomic/pull db selector eid)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn ^:private pull-param-type
-  [param]
-  (cond
-    (:lacinia->datomic.param/eid param)    :eid
-    (:lacinia->datomic.param/lookup param) :lookup
-    :else                                  :unknown))
 
 (defn ^:private extract-lacinia-selections
   [context]
@@ -123,32 +91,31 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn ^:private query-resolve-pull-fields
+(defn ^:private query-resolve-one-fields
   [engine-conn]
   (let [selector '[* {:field/parent [*]
                       :param/_parent [*]}]
         eids (-> (q/q '[:find ?f
                         :where
-                        [?f :lacinia->datomic.query/type :pull]
+                        [?f :lacinia->datomic.query/type :one]
                         [?f :field/parent ?t]
                         [?t :lacinia/query true]
                         [?t :lacinia/tag true]
                         [?f :lacinia/tag true]
                         [?p :param/parent ?f]
-                        (or [?p :lacinia->datomic.param/lookup]
-                            [?p :lacinia->datomic.param/eid])]
+                        [?p :lacinia->datomic.param/lookup-ref]]
                       @engine-conn)
                  vec flatten)]
     (->> eids
          (d/pull-many @engine-conn selector))))
 
-(defn ^:private query-resolve-find-fields
+(defn ^:private query-resolve-many-fields
   [engine-conn]
   (let [selector '[* {:field/parent [*]
                       :param/_parent [*]}]
         eids (-> (q/q '[:find ?f
                         :where
-                        [?f :lacinia->datomic.query/type :find]
+                        [?f :lacinia->datomic.query/type :many]
                         [?f :field/parent ?t]
                         [?t :lacinia/query true]
                         [?t :lacinia/tag true]
@@ -292,20 +259,17 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn ^:private field->resolve-pull-entry
+(defn ^:private field->resolve-one-entry
   [{:keys [field/camelCaseName field/parent param/_parent] :as field}]
   {:field-name camelCaseName
    :args (reduce
           (fn [m param]
             (assoc m (:param/camelCaseName param)
-                   {:type (pull-param-type param)
-                    :ident (case (pull-param-type param)
-                             :lookup (:lacinia->datomic.param/lookp param)
-                             :none)
+                   {:lookup-ref (:lacinia->datomic.param/lookup-ref param)
                     :transform (:lacinia->datomic.param/transform param)}))
           {} _parent)})
 
-(defn ^:private field->resolve-find-entry
+(defn ^:private field->resolve-many-entry
   [{:keys [field/camelCaseName param/_parent] :as field}]
   {:field-name camelCaseName
    :args (reduce
@@ -335,16 +299,16 @@
     (clojure.pprint/pprint payload)
     resolver-type))
 
-(defmethod execute-fetch :list-resolver
+(defmethod execute-fetch :one-resolver
+  [db {:keys [placeholder selector offset limit where] :as payload}]
+  (-> (fetch-one db selector placeholder where)
+      (resolve/with-context {:where where})))
+
+(defmethod execute-fetch :many-resolver
   [db {:keys [placeholder selector offset limit where] :as payload}] 
   (-> (fetch-page db selector placeholder where
                   {:offset offset
                    :limit limit})
-      (resolve/with-context {:where where})))
-
-(defmethod execute-fetch :one-resolver
-  [db {:keys [placeholder selector offset limit where] :as payload}]
-  (-> (fetch-one db selector placeholder where)
       (resolve/with-context {:where where})))
 
 (defmethod execute-fetch :lookup-resolver
@@ -369,13 +333,13 @@
 (defmulti ^:private get-field-selection
   (fn [resolver-type ctx] resolver-type))
 
-(defmethod get-field-selection :list-resolver
-  [_ ctx]
-  (context->field-selection ctx [:nodes]))
-
 (defmethod get-field-selection :one-resolver
   [_ ctx]
   (context->field-selection ctx))
+
+(defmethod get-field-selection :many-resolver
+  [_ ctx]
+  (context->field-selection ctx [:nodes]))
 
 (defmethod get-field-selection :lookup-resolver
   [_ ctx]
@@ -386,11 +350,11 @@
 (defmulti ^:private get-placeholder
   (fn [resolver-type ctx] resolver-type))
 
-(defmethod get-placeholder :list-resolver
+(defmethod get-placeholder :one-resolver
   [_ _]
   '?e)
 
-(defmethod get-placeholder :one-resolver
+(defmethod get-placeholder :many-resolver
   [_ _]
   '?e)
 
@@ -405,7 +369,17 @@
 (defmulti ^:private get-where
   (fn [resolver-type ctx] resolver-type))
 
-(defmethod get-where :list-resolver
+(defmethod get-where :one-resolver
+  [_ {:keys [args field-entry]}]
+  (reduce-kv (fn [a in-arg-name in-arg-val]
+               (let [{:keys [lookup-ref transform]} (get-in field-entry [:args in-arg-name])
+                     arg-val (if transform
+                               ((find-var transform) in-arg-val)
+                               in-arg-val)]
+                 (reduced [['?e lookup-ref arg-val]])))
+             nil args))
+
+(defmethod get-where :many-resolver
   [_ {:keys [args field-entry]}]
   (reduce-kv (fn [c arg-k arg-v]
                (if-let [{:keys [where-builder-fn]}
@@ -413,19 +387,6 @@
                  (where-builder-fn c args)
                  c))
              [] args))
-
-(defmethod get-where :one-resolver
-  [_ {:keys [args field-entry]}]
-  (reduce-kv (fn [a in-arg-name in-arg-val]
-               (let [{:keys [type ident transform]} (get-in field-entry [:args in-arg-name])
-                     arg-val (if transform
-                               ((find-var transform) in-arg-val)
-                               in-arg-val)]
-                 (if type
-                   (reduced (cond
-                              (= :eid type) [['?e :db/id (Long/parseLong arg-val)]]
-                              (= :lookup type) [['?e ident arg-val]])))))
-             nil args))
 
 (defmethod get-where :lookup-resolver
   [_ {:keys [lookup reverse-lookup prev-where] :as ctx}]
@@ -458,22 +419,22 @@
                          :offset        offset
                          :limit         limit}))))
 
-(defn ^:private attach-pull-resolvers
-  [lacinia-schema pull-fields engine-conn]
-  (->> pull-fields
+(defn ^:private attach-one-resolvers
+  [lacinia-schema one-fields engine-conn]
+  (->> one-fields
        (reduce
         (fn [m {:keys [field-name] :as field-entry}]
           (assoc-in m [:queries field-name :resolve]
                     (create-resolver :one-resolver field-entry engine-conn)))
         lacinia-schema)))
 
-(defn ^:private attach-find-resolvers
-  [lacinia-schema find-fields engine-conn]
-  (->> find-fields
+(defn ^:private attach-many-resolvers
+  [lacinia-schema many-fields engine-conn]
+  (->> many-fields
        (reduce
         (fn [m {:keys [field-name] :as field-entry}]
           (assoc-in m [:queries field-name :resolve]
-                    (create-resolver :list-resolver field-entry engine-conn)))
+                    (create-resolver :many-resolver field-entry engine-conn)))
         lacinia-schema)))
 
 (defn ^:private attach-lookup-resolvers
@@ -492,16 +453,16 @@
 
 (defn attach-resolvers
   [lacinia-schema engine-conn]
-  (let [pull-fields (->> engine-conn
-                         query-resolve-pull-fields
-                         (map field->resolve-pull-entry))
-        find-fields (->> engine-conn
-                         query-resolve-find-fields
-                         (map field->resolve-find-entry))
+  (let [one-fields (->> engine-conn
+                        query-resolve-one-fields
+                        (map field->resolve-one-entry))
+        many-fields (->> engine-conn
+                         query-resolve-many-fields
+                         (map field->resolve-many-entry))
         lookup-fields (->> engine-conn
                            query-resolve-lookup-fields
                            (map field->resolve-lookup-entry))]
     (-> lacinia-schema
-        (attach-pull-resolvers pull-fields engine-conn)
-        (attach-find-resolvers find-fields engine-conn)
+        (attach-one-resolvers one-fields engine-conn)
+        (attach-many-resolvers many-fields engine-conn)
         (attach-lookup-resolvers lookup-fields engine-conn))))

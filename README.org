@@ -101,71 +101,81 @@ functional manner.
 TBD: what does it mean in practice
 
 
-* All markers (TBD - this is messy)
+* Basic querying (TBD)
 
-
-1. ~:lacinia->datomic.query/type :pull~
-
-- must be in a field in a ~lacinia/query~
-- both entity and field must be lacinia tagged
-- will look for params ~:lacinia->datomic.param/lookup~ or ~:lacinia->datomic.param/eid~
-
-2. ~:lacinia->datomic.query/type :find~
+** 1 ~:lacinia->datomic.query/type :one~
 
 - must be in a field in a ~lacinia/query~
 - both entity and field must be lacinia tagged
+- will look for params:
+  - ~:lacinia->datomic.param/lookup-ref~ (for ~[?e :employee/email
+    "tl@work.co"]~ kind of cases)
+  - (only the first one found)
+- will send passed argument to ~:lacinia->datomic.param/transform~
 
-3. "Fields resolvers"
+** 2 ~:lacinia->datomic.query/type :many~
 
-- will look for params ~:lacinia->datomic.field/lookup~ or ~:lacinia->datomic.field/reverse-lookup~
+- must be in a field in a ~lacinia/query~
+- both entity and field must be lacinia tagged
+- needs the details on next section
 
+** 3 "Fields resolvers"
 
+???
+~:lacinia->datomic.field/lookup-one~ not existing yet
+~:lacinia->datomic.field/lookup-many~ formerly called lookup
+~:lacinia->datomic.field/reverse-lookup-one~ not existing yet
+~:lacinia->datomic.field/reverse-lookup-many~ formerly called reverse-lookup
+???
 
-~:lacinia->datomic.field/dbid true~
+** Special case
 
-:lacinia->datomic.field/depends-on [:employee/first-name
+- :lacinia->datomic.field/depends-on [:employee/first-name
                                            :employee/last-name]
+- then can receive both on a resolver
 
-:lacinia->datomic.field/reverse-lookup :employee/supervisor
+** "Wrapping" resolvers
 
-:lacinia->datomic.field/lookup :employee/projects
+- TBD: should we have a final "resolver" like function with the
+  prepped payload before returning the response???
 
+* Paged "many" (TBD)
 
+** Structure (TBD)
 
-
+** Params (TBD)
+ 
 :lacinia->datomic.param/offset true
 
 :lacinia->datomic.param/limit true
 
-:lacinia->datomic.param/lookup :employee/email
-
-:lacinia->datomic.param/transform user/transform-email
-
-:lacinia->datomic.param/eid true
+** Where builders (TBD)
 
 :lacinia->datomic.param/where-builder user/build-employee-name-search-where
 
+
+* Inputs/Mutations (TBD)
 
 
 
 :lacinia->datomic.input/map-to Employee
 
-:lacinia->datomic.input/attach-from Project
+:lacinia->datomic.input/attach-from Project TBD> try to remove
 
-:lacinia->datomic.input/dbid true
+:lacinia->datomic.input/dbid true TBD> try to remove
 
-:lacinia->datomic.input/delete-from Project
-
-
+:lacinia->datomic.input/delete-from Project TBD> try to remove
 
 
-:lacinia->datomic.mutation/type :upsert
 
-:lacinia->datomic.mutation/type :add-to
 
-:lacinia->datomic.mutation/type :attach-to
+:lacinia->datomic.mutation/type :upsert TBD> keep
 
-:lacinia->datomic.mutation/type :delete
+:lacinia->datomic.mutation/type :add-to TBD> try to remove
+
+:lacinia->datomic.mutation/type :attach-to TBD> try to remove
+
+:lacinia->datomic.mutation/type :delete TBD> keep
 
 * Bugs
 

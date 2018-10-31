@@ -5,8 +5,7 @@
       :datomic/tag true}
     Employee
     [^{:type ID
-       :lacinia/tag true
-       :lacinia->datomic.field/dbid true}
+       :lacinia/tag true}
      id
      
      ^{:type String
@@ -77,8 +76,7 @@
       :lacinia/tag true}
     Project
     [^{:type ID
-       :lacinia/tag true
-       :lacinia->datomic.field/dbid true}
+       :lacinia/tag true}
      id
 
      ^{:type String
@@ -155,27 +153,16 @@
       :lacinia/query true}
     QueryRoot
     [^{:type Employee
-       :lacinia->datomic.query/type :pull}
+       :lacinia->datomic.query/type :one}
      employee
      [^{:type String
         :optional true
-        :lacinia->datomic.param/lookup :employee/email
+        :lacinia->datomic.param/lookup-ref :employee/email
         :lacinia->datomic.param/transform user/transform-email}
-      email
-      ^{:type ID
-        :optional true
-        :lacinia->datomic.param/eid true}
-      id]
-
-     ^{:type Project
-       :lacinia->datomic.query/type :pull}
-     project
-     [^{:type ID
-        :lacinia->datomic.param/eid true}
-      id]
+      email]
 
      ^{:type EmployeeList
-       :lacinia->datomic.query/type :find
+       :lacinia->datomic.query/type :many
        :lacinia/resolve :project/upsert}
      employees
      [^{:type String
