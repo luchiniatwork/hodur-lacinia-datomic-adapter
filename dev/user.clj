@@ -77,6 +77,20 @@
                  (list 'or
                        [(list '.startsWith ^String '?first-name nameSearch)])]))
 
+(defn new-build-employee-name-search-where
+  [{:keys [where args]} placeholder {:keys [nameSearch] :as args-in}]
+  (let [where-expr '[[?e :employee/first-name ?first-name]
+                     [?e :employee/last-name ?last-name]
+                     (or-join [?term ?term-up ?first-name ?last-name]
+                              (and [(<= ?term ?first-name)]
+                                   [(< ?first-name ?term-up)])
+                              (and [(<= ?term ?last-name)]
+                                   [(< ?last-name ?term-up)]))]
+        term (str nameSearch "a")
+        term-up (str nameSearch "z")]
+    {:where (concat where where-expr)
+     :args (assoc args '?term term '?term-up term-up)}))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Real initialization
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -110,24 +124,24 @@
 (def db-conn (-> client
                  (ensure-db "hodur-test")))
 
-(datomic/transact db-conn {:tx-data [{:employee/email "tl@work.co"
-                                      :employee/first-name "Tiago"
-                                      :employee/last-name "Luchini"}
-                                     {:employee/email "me@work.co"
-                                      :employee/first-name "Marcelo"
-                                      :employee/last-name "Eduardo"}
-                                     {:employee/email "zeh@work.co"
-                                      :employee/first-name "Zeh"
-                                      :employee/last-name "Fernandes"
-                                      :employee/supervisor [:employee/email "tl@work.co"]}
-                                     {:employee/email "a@work.co"
-                                      :employee/first-name "A"
-                                      :employee/last-name "Fernandes"
-                                      :employee/supervisor [:employee/email "tl@work.co"]}
-                                     {:employee/email "b@work.co"
-                                      :employee/first-name "B"
-                                      :employee/last-name "Fernandes"
-                                      :employee/supervisor [:employee/email "tl@work.co"]}]})
+#_(datomic/transact db-conn {:tx-data [{:employee/email "tl@work.co"
+                                        :employee/first-name "Tiago"
+                                        :employee/last-name "Luchini"}
+                                       {:employee/email "me@work.co"
+                                        :employee/first-name "Marcelo"
+                                        :employee/last-name "Eduardo"}
+                                       {:employee/email "zeh@work.co"
+                                        :employee/first-name "Zeh"
+                                        :employee/last-name "Fernandes"
+                                        :employee/supervisor [:employee/email "tl@work.co"]}
+                                       {:employee/email "a@work.co"
+                                        :employee/first-name "A"
+                                        :employee/last-name "Fernandes"
+                                        :employee/supervisor [:employee/email "tl@work.co"]}
+                                       {:employee/email "b@work.co"
+                                        :employee/first-name "B"
+                                        :employee/last-name "Fernandes"
+                                        :employee/supervisor [:employee/email "tl@work.co"]}]})
 
 
 (def prepared-schema (-> lacinia-schema
@@ -146,31 +160,87 @@
 ;; Test stuff
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn run-query [query]
+(defn run-query [db-conn query]
   (lacinia/execute compiled-schema
                    query
                    nil {:db (datomic/db db-conn)}))
 
 ;; getting a list with a search parameters
-
-(run-query
- "
+#_(run-query db-conn "
 {
-  employees (nameSearch: \"Ze\") {
+  employees (nameSearch: \"Fer\") {
     totalCount
-    nodes { email fullName }
   }
 }")
 
-;; getting a "one" with an eid
-#_(run-query
-   "
+;; getting a "one" with a lookup ref
+#_(run-query db-conn "
 {
   employee (email: \"tl@work.co\") {
     email
     firstName
+    lastName
   }
 }")
+
+;; getting a "one" with a lookup ref and a lookup field
+#_(run-query db-conn "
+{
+  employee (email: \"a@work.co\") {
+    email
+    firstName
+    lastName
+    supervisor {
+      fullName
+    }
+  }
+}")
+
+;; getting a "one" with a lookup ref and a reverse lookup field
+#_(run-query db-conn "
+{
+  employee (email: \"tl@work.co\") {
+    email
+    fullName
+    reportees {
+      totalCount
+      nodes { email }
+    }
+  }
+}")
+
+
+;; getting a "one" with a lookup ref and a normal lookup field
+#_(run-query db-conn "
+{
+  employee (email: \"tl@worl.co\") {
+    email
+    fullName
+    projects {
+      totalCount
+      nodes { name }
+    }
+  }
+}")
+
+
+;; from the supervisor ?e, find all ?r's
+(datomic/q {:query '{:find [(pull ?r [:employee/email])]
+                     :where
+                     [[?e :employee/email ?email]
+                      [?r :employee/supervisor ?e]]
+                     :in ($ ?email)}
+            :args [(datomic/db db-conn)
+                   "tl@work.co"]})
+
+;; from ?e, find all ?p's
+(datomic/q {:query '{:find [(pull ?p [:project/name])]
+                     :where
+                     [[?e :employee/email ?email]
+                      [?e :employee/projects ?p]]
+                     :in ($ ?email)}
+            :args [(datomic/db db-conn)
+                   "tl@worl.co"]})
 
 (comment )
 
@@ -279,77 +349,158 @@
    (datomic/db db-conn))
 
 
-(comment (datomic/q
-          '[:find ?e (count ?r)
-            :where
-            [?e :employee/email "tl@work.co"]
-            [?r :employee/supervisor ?e]]
-          (datomic/db db-conn))
 
-         (datomic/q
-          '[:find ?e
-            :where
-            [?e :employee/email "tl@work.co"]]
-          (datomic/db db-conn))
 
-         (datomic/q
-          '[:find ?eid
-            :in $ ?eid
-            :where
-            [?eid]]
-          (datomic/db db-conn)
-          42630264832131144)
+(comment
 
-         (datomic/pull (datomic/db db-conn)
-                       '[*]
-                       42630264832131144)
-
-         
-         (datomic/q
-          '[:find ?e
-            :where
-            [?e :employee/email "zeh@work.co"]]
-          (datomic/db db-conn))
-
-         (def all-eids
-           (flatten
-            (datomic/q
-             {:query '[:find ?e
+  ;; without args
+  (datomic/q {:query '[:find ?e
+                       :in $
                        :where
-                       [?e :employee/first-name]]
-              :args [(datomic/db db-conn)]
-              :limit 2
-              :offset 1})))
+                       [?e :employee/email "tl@work.co"]]
+              :args [(datomic/db db-conn)]})
+  
+  ;; fuller map interface and args 
+  (datomic/q {:query '[:find ?e
+                       :in $ ?email
+                       :where
+                       [?e :employee/email ?email]]
+              :args [(datomic/db db-conn)
+                     "tl@work.co"]})
+
+  ;; same as above but query is a map
+  (datomic/q {:query '{:find [?e]
+                       :in [$ ?email]
+                       :where [[?e :employee/email ?email]]}
+              :args [(datomic/db db-conn)
+                     "tl@work.co"]})
+
+  ;; same as above but with pull
+  (datomic/q {:query '{:find [(pull ?e [:employee/email
+                                        :employee/first-name])]
+                       :in [$ ?email]
+                       :where [[?e :employee/email ?email]]}
+              :args [(datomic/db db-conn)
+                     "tl@work.co"]})
+
+  (datomic/q {:query '{:find [?e],
+                       :where
+                       ([?e :employee/first-name ?search-term]
+                        [?e :employee/last-name ?last-name]),
+                       :in ($ ?search-term)}
+              :args [(datomic/db db-conn)
+                     "Z"]})
+  
+  ;; this was a lot of work and only works with this hack of adding
+  ;; and `a` to ?term, and a `z` to ?term-up
+  (time (datomic/q {:query '{:find [(pull ?e [:employee/email
+                                              :employee/first-name
+                                              :employee/last-name])]
+                             :in [$ ?term ?term-up]
+                             :where [[?e :employee/first-name ?first-name]
+                                     [?e :employee/last-name ?last-name]
+                                     (or-join [?term ?term-up ?first-name ?last-name]
+                                              (and [(<= ?term ?first-name)]
+                                                   [(< ?first-name ?term-up)])
+                                              (and [(<= ?term ?last-name)]
+                                                   [(< ?last-name ?term-up)]))]}
+                    :args [(datomic/db db-conn)
+                           "Ta" "Tz"]}))
+
+  (datomic/q {:query '{:find [?e]
+                       :in ($ ?term ?term-up)
+                       :where ([?e :employee/first-name ?first-name]
+                               [?e :employee/last-name ?last-name]
+                               (or-join [?term ?term-up ?first-name ?last-name]
+                                        (and [(<= ?term ?first-name)]
+                                             [(< ?first-name ?term-up)])
+                                        (and [(<= ?term ?last-name)]
+                                             [(< ?last-name ?term-up)])))}
+              :args [(datomic/db db-conn)
+                     "Ta" "Tz"]})
+
+  
+  
+  ;; same as above but with pull AND keyword conversion
+  (datomic/q {:query '{:find [(pull ?e [:employee/email
+                                        (:employee/first-name :as :firstName)])]
+                       :in [$ ?email]
+                       :where [[?e :employee/email ?email]]}
+              :args [(datomic/db db-conn)
+                     "tl@work.co"]})
+
+  
+  (datomic/q
+   '[:find ?e (count ?r)
+     :where
+     [?e :employee/email "tl@work.co"]
+     [?r :employee/supervisor ?e]]
+   (datomic/db db-conn))
+
+  (datomic/q
+   '[:find ?e
+     :where
+     [?e :employee/email "tl@work.co"]]
+   (datomic/db db-conn))
+
+  (datomic/q
+   '[:find ?eid
+     :in $ ?eid
+     :where
+     [?eid]]
+   (datomic/db db-conn)
+   42630264832131144)
+
+  (datomic/pull (datomic/db db-conn)
+                '[*]
+                42630264832131144)
+
+  
+  (datomic/q
+   '[:find ?e
+     :where
+     [?e :employee/email "zeh@work.co"]]
+   (datomic/db db-conn))
+
+  (def all-eids
+    (flatten
+     (datomic/q
+      {:query '[:find ?e
+                :where
+                [?e :employee/first-name]]
+       :args [(datomic/db db-conn)]
+       :limit 2
+       :offset 1})))
 
 
-         ;; find tiago
-         (fetch-one (datomic/db db-conn)
-                    '[(:employee/first-name :as :firstName)]
-                    '?e
-                    [['?e :employee/email "tl@work.co"]])
+  ;; find tiago
+  (fetch-one (datomic/db db-conn)
+             '[(:employee/first-name :as :firstName)]
+             '?e
+             [['?e :employee/email "tl@work.co"]])
 
-         ;; paginate tiago's reportees
-         (fetch-page (datomic/db db-conn)
-                     '[:employee/first-name]
-                     '?e
-                     [['?s :employee/email "tl@work.co"]
-                      ['?e :employee/supervisor '?s]]
-                     {:limit 2})
+  ;; paginate tiago's reportees
+  (fetch-page (datomic/db db-conn)
+              '[:employee/first-name]
+              '?e
+              [['?s :employee/email "tl@work.co"]
+               ['?e :employee/supervisor '?s]]
+              {:limit 2})
 
-         (datomic/q
-          '[:find (count ?e)
-            :where
-            [?e :employee/first-name]]
-          (datomic/db db-conn))
-
-
+  (datomic/q
+   '[:find (count ?e)
+     :where
+     [?e :employee/first-name]]
+   (datomic/db db-conn))
 
 
 
-         (pull-many (datomic/db db-conn)
-                    '[:employee/first-name]
-                    [42630264832131144 37418579716472906])
 
-         (pull-many (datomic/db db-conn)
-                    '[:employee/first-name]
-                    all-eids))
+
+  (pull-many (datomic/db db-conn)
+             '[:employee/first-name]
+             [42630264832131144 37418579716472906])
+
+  (pull-many (datomic/db db-conn)
+             '[:employee/first-name]
+             all-eids))

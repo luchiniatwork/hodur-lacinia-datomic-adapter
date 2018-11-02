@@ -17,7 +17,7 @@
      ^{:type String
        :lacinia/tag true
        :datomic/tag true}
-     first-name -> firstName -> :employee/first-name
+     first-name
 
      ^{:type String
        :lacinia/tag true
@@ -43,7 +43,7 @@
      reportees
      [^{:type Integer
         :optional true
-        :default 0 
+        :default 0
         :lacinia->datomic.param/offset true}
       offset
       ^{:type Integer
@@ -167,7 +167,7 @@
      employees
      [^{:type String
         :optional true
-        :lacinia->datomic.param/where-builder user/build-employee-name-search-where}
+        :lacinia->datomic.param/filter-builder user/new-build-employee-name-search-where}
       name-search
       ^{:type Integer
         :optional true

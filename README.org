@@ -101,9 +101,11 @@ functional manner.
 TBD: what does it mean in practice
 
 
-* Basic querying (TBD)
+* Querying
 
-** 1 ~:lacinia->datomic.query/type :one~
+** Querying one
+
+~:lacinia->datomic.query/type :one~
 
 - must be in a field in a ~lacinia/query~
 - both entity and field must be lacinia tagged
@@ -113,20 +115,81 @@ TBD: what does it mean in practice
   - (only the first one found)
 - will send passed argument to ~:lacinia->datomic.param/transform~
 
-** 2 ~:lacinia->datomic.query/type :many~
+** Querying many
+
+~:lacinia->datomic.query/type :many~
 
 - must be in a field in a ~lacinia/query~
 - both entity and field must be lacinia tagged
-- needs the details on next section
 
-** 3 "Fields resolvers"
+*** Modeling many responses
 
-???
-~:lacinia->datomic.field/lookup-one~ not existing yet
+- "list object":
+
+[^Integer
+     total-count
+     
+     ^PageInfo
+     page-info
+
+     ^{:type Employee
+       :cardinality [0 n]}
+     nodes]
+
+- then page info:
+
+[PageInfo
+    [^{:type Integer}
+     total-pages
+
+     ^{:type Integer}
+     current-page
+
+     ^{:type Integer}
+     page-size
+     
+     ^{:type Integer}
+     current-offset
+
+     ^{:type Boolean}
+     has-next
+     
+     ^{:type Integer}
+     next-offset
+
+     ^{:type Boolean}
+     has-prev
+     
+     ^{:type Integer}
+     prev-offset]
+
+*** Parameters
+
+:lacinia->datomic.param/offset true
+:lacinia->datomic.param/limit true
+
+*** Filter builders (TBD)
+
+:lacinia->datomic.param/filter-builder user/new-build-employee-name-search-where
+
+** Lookups
+
+- one to one are simple lookups
+- everything else is paginated... two options:
+
+*** Direct Lookup
+
 ~:lacinia->datomic.field/lookup-many~ formerly called lookup
-~:lacinia->datomic.field/reverse-lookup-one~ not existing yet
+
+*** Reverse lookup
+
 ~:lacinia->datomic.field/reverse-lookup-many~ formerly called reverse-lookup
-???
+
+** Custom Resolvers
+
+- TBD: should we have a final "resolver" like function with the
+  prepped payload before returning the response???
+
 
 ** Special case
 
@@ -134,24 +197,9 @@ TBD: what does it mean in practice
                                            :employee/last-name]
 - then can receive both on a resolver
 
-** "Wrapping" resolvers
 
-- TBD: should we have a final "resolver" like function with the
-  prepped payload before returning the response???
-
-* Paged "many" (TBD)
-
-** Structure (TBD)
-
-** Params (TBD)
  
-:lacinia->datomic.param/offset true
 
-:lacinia->datomic.param/limit true
-
-** Where builders (TBD)
-
-:lacinia->datomic.param/where-builder user/build-employee-name-search-where
 
 
 * Inputs/Mutations (TBD)
